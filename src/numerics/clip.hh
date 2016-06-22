@@ -562,6 +562,7 @@ namespace hpc {
       typedef typename BoxSeqT::value_type real_type;
 
       hpc::matrix<real_type> crds( 8, 3 ), ecs( 8, 3 );
+           // 8 verticies of the box only done so looping
       crds( 0, 0 ) = box_min[0]; crds( 0, 1 ) = box_min[1]; crds( 0, 2 ) = box_min[2];
       crds( 1, 0 ) = box_max[0]; crds( 1, 1 ) = box_min[1]; crds( 1, 2 ) = box_min[2];
       crds( 2, 0 ) = box_max[0]; crds( 2, 1 ) = box_max[1]; crds( 2, 2 ) = box_min[2];
@@ -570,7 +571,8 @@ namespace hpc {
       crds( 5, 0 ) = box_max[0]; crds( 5, 1 ) = box_min[1]; crds( 5, 2 ) = box_max[2];
       crds( 6, 0 ) = box_max[0]; crds( 6, 1 ) = box_max[1]; crds( 6, 2 ) = box_max[2];
       crds( 7, 0 ) = box_min[0]; crds( 7, 1 ) = box_max[1]; crds( 7, 2 ) = box_max[2];
-      for( int ii = 0; ii < 8; ++ii )
+      // get ecs coordinates of the box verticies too stored on 'ecs'
+        for( int ii = 0; ii < 8; ++ii )
       {
 	 hpc::num::cartesian_to_ecs<double>( crds( ii, 0 ), crds( ii, 1 ), crds( ii, 2 ),
 					     ecs( ii, 0 ), ecs( ii, 1 ), ecs( ii, 2 ) );
@@ -579,7 +581,13 @@ namespace hpc {
       // To discard based on max distance we need to use a
       // collision routine.
       {
+              // ecs is light cone dimensions lower right, top left in ra/dec/distance min/max
+              // ecs_max[2] = max distance from origin for the lc
+              // despite using box collission, this is checking if closest point in box is further than
+              // the max distance of lc
+              // this could be done instead by using the below algorithm, eg ecs (ii, 2) > ecs_max[2]
          boost::array<real_type,4> sph{ 0.0, 0.0, 0.0, ecs_max[2] };
+
          if( !hpc::sphere_box_collision( box_min.begin(), box_min.end(), box_max.begin(), sph.begin() ) )
          {
             LOGTLN( "Box outside outer radius." );
@@ -589,6 +597,9 @@ namespace hpc {
 
       // Alternatively, all of the corners may be below the minimum
       // radial distance.
+           // Same again, if max distance of box is closer than closest point of lc, but done differently
+           // for some reason
+           // ecs is ecs of hte BOX not the light cone
       bool discard = true;
       for( unsigned ii = 0; ii < 8; ++ii )
       {
@@ -605,8 +616,16 @@ namespace hpc {
          return false;
       }
 
+
       // Boxes may be discarded if they are above/below the highest/lowest
       // points created from +-sin(dec).
+
+           // Are any boxes have min/max z's like this though? general I suppose
+           // ecs_max[1] is dec
+           // Also assumes dec can be <= 0 which shouldn't be
+           // smallest z on box is >= radius * sin(biggest dec)
+           // or
+           // biggest z on box is <= radius * sin(smallest dec)
       if( (ecs_max[1] >= 0.0 && box_min[2] >= ecs_max[2]*sin( ecs_max[1] )) ||
           (ecs_min[1] <= 0.0 && box_max[2] <= ecs_max[2]*sin( ecs_min[1] )) )
       {
@@ -616,6 +635,8 @@ namespace hpc {
 
       // Now we handle RA and DEC. We need to split the operation
       // into to halves.
+           // 'need' is a little strong? :P
+           // UI assumes <= 90 so this is not really required
       for( int half_ii = 0; half_ii < 2; ++half_ii )
       {
          LOGTLN( "Checking half: ", half_ii );
@@ -651,14 +672,20 @@ namespace hpc {
          LOGTLN( "Using RA range: ", min_ra, " to ", max_ra );
 
          // Clip the appropriate surface.
+              // Not really clip, this is making a 'surface' from the verticies of the box from above (grabs the first 4
+              // only needs first four as second four are rpeated at different height
+              // Set's it's z co-ordinate to zero though for some reason?
+              // WHY TWO SURFACES?!
          std::list<boost::array<real_type,3> > surf[2];
          for( int ii = 0; ii < 4; ++ii )
             surf[1].push_back( boost::array<real_type,3>{ crds( ii, 0 ), crds( ii, 1 ), 0.0 } );
-         if( hpc::approx( ecs_min[0], ecs_max[0], 1e-8 ) )
+         // if light cone min ra and max ra are equal...? wut? shouldn't have continued earlier? doubt we hit it
+              if( hpc::approx( ecs_min[0], ecs_max[0], 1e-8 ) )
          {
             // Do nothing, as we want an empty list.
             surf[1].clear();
          }
+                      // If light cone min ra is zero, max ra is 2pi?  shouldn't happen, as above is set to single pi
          else if( hpc::approx( ecs_min[0], 0.0, 1e-8 ) && hpc::approx( ecs_max[0], 2.0*M_PI, 1e-8 ) )
          {
             // Fill the list with the standard.
@@ -667,6 +694,7 @@ namespace hpc {
          {
             boost::array<real_type,4> ra_planes[2];
             boost::array<real_type,3> tmp[2];
+                 // 45 degrees of dec? find
             num::ecs_to_cartesian<real_type>( min_ra, -0.25*M_PI, tmp[0][0], tmp[0][1], tmp[0][2] );
             num::ecs_to_cartesian<real_type>( min_ra,  0.25*M_PI, tmp[1][0], tmp[1][1], tmp[1][2] );
             cross_product_3( tmp[1], tmp[0], ra_planes[0] );
@@ -804,6 +832,7 @@ namespace hpc {
          // basically checking the cylinder created by the dec circles...
          // wow that's confusing.
          {
+                 // Seems this is assuming columns may not have full height?
             real_type upp_rad = cos( ecs_max[1] )*ecs_min[2];
             real_type upp_z   = sin( ecs_max[1] )*ecs_min[2];
             real_type low_rad = cos( ecs_min[1] )*ecs_min[2];
